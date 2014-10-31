@@ -10,16 +10,36 @@
 
 #import <Availability.h>
 
+
+#pragma mark - AKCollectionViewLayout
+
+@interface AKCollectionViewLayout : UICollectionViewFlowLayout
+@end
+
+
+#pragma mark - AKCollectionViewCell
+
 @interface AKCollectionViewCell : UICollectionViewCell
 @property (nonatomic, strong) UILabel *label;
 @property (nonatomic, strong) UIFont *font;
 @property (nonatomic, strong) UIFont *highlightedFont;
 @end
 
-@interface AKCollectionViewLayout : UICollectionViewFlowLayout
-@end
+
+
+
+
+
+
+
+
+
+#pragma mark - AKPickerView
 
 @interface AKPickerView () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
+{
+    NSLock *lock;
+}
 @property (nonatomic, strong) UICollectionView *collectionView;
 @property (nonatomic, assign) NSUInteger selectedItem;
 - (CGFloat)offsetForItem:(NSUInteger)item;
@@ -31,6 +51,8 @@
 
 - (void)initialize
 {
+    lock = [[NSLock alloc] init];
+    
 	self.font = self.font ?: [UIFont fontWithName:@"HelveticaNeue-Light" size:20];
 	self.highlightedFont = self.highlightedFont ?: [UIFont fontWithName:@"HelveticaNeue" size:20];
 	self.textColor = self.textColor ?: [UIColor darkGrayColor];
@@ -141,50 +163,72 @@
 
 - (void)reloadData
 {
-	[self invalidateIntrinsicContentSize];
-	[self.collectionView.collectionViewLayout invalidateLayout];
-	[self.collectionView reloadData];
-	dispatch_async(dispatch_get_main_queue(), ^{
-		[self selectItem:self.selectedItem animated:NO];
-	});
+    @synchronized (lock)
+    {
+        [self invalidateIntrinsicContentSize];
+        [self.collectionView.collectionViewLayout invalidateLayout];
+        [self.collectionView reloadData];
+        
+        //	dispatch_async(dispatch_get_main_queue(), ^{
+        //		[self selectItem:self.selectedItem animated:NO];
+        //	});
+    }
 }
 
 - (CGFloat)offsetForItem:(NSUInteger)item
 {
-	CGFloat offset = 0.0;
-	for (NSInteger i = 0; i < item; i++) {
-		NSIndexPath *_indexPath = [NSIndexPath indexPathForItem:i inSection:0];
-		AKCollectionViewCell *cell = (AKCollectionViewCell *)[self.collectionView cellForItemAtIndexPath:_indexPath];
-		offset += cell.bounds.size.width;
-	}
-
-	NSIndexPath *firstIndexPath = [NSIndexPath indexPathForItem:0 inSection:0];
-	CGSize firstSize = [self.collectionView cellForItemAtIndexPath:firstIndexPath].bounds.size;
-	NSIndexPath *selectedIndexPath = [NSIndexPath indexPathForItem:item inSection:0];
-	CGSize selectedSize = [self.collectionView cellForItemAtIndexPath:selectedIndexPath].bounds.size;
-	offset -= (firstSize.width - selectedSize.width) / 2;
-
-	return offset;
+//    @synchronized (lock)
+//    {
+        CGFloat offset = 0.0;
+        
+//        NSLog(@"El numero de elementos es: %ld", (long)[self.collectionView numberOfItemsInSection:0]);
+        
+        for (NSInteger i = 0; i < item; i++) {
+            NSIndexPath *_indexPath = [NSIndexPath indexPathForItem:i inSection:0];
+            
+            UICollectionViewCell *cellAux = [self collectionView:self.collectionView cellForItemAtIndexPath:_indexPath];
+            
+            //		AKCollectionViewCell *cell = (AKCollectionViewCell *)[self.collectionView cellForItemAtIndexPath:_indexPath];
+            offset += cellAux.bounds.size.width;
+        }
+        
+        NSIndexPath *firstIndexPath = [NSIndexPath indexPathForItem:0 inSection:0];
+        CGSize firstSize = [self.collectionView cellForItemAtIndexPath:firstIndexPath].bounds.size;
+        NSIndexPath *selectedIndexPath = [NSIndexPath indexPathForItem:item inSection:0];
+        CGSize selectedSize = [self.collectionView cellForItemAtIndexPath:selectedIndexPath].bounds.size;
+        offset -= (firstSize.width - selectedSize.width) / 2;
+        
+        return offset;
+//    }
 }
 
 - (void)scrollToItem:(NSUInteger)item animated:(BOOL)animated
 {
-	[self.collectionView setContentOffset:CGPointMake([self offsetForItem:item],
-													  self.collectionView.contentOffset.y)
-								 animated:animated];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        
+        NSLog(@"El offset es: %f", [self offsetForItem:item]);
+        
+        [self.collectionView setContentOffset:CGPointMake([self offsetForItem:item],
+                                                          self.collectionView.contentOffset.y)
+                                     animated:animated];
+        
+    });
 }
 
 - (void)selectItem:(NSUInteger)item animated:(BOOL)animated
 {
-	[self.collectionView selectItemAtIndexPath:[NSIndexPath indexPathForItem:item inSection:0]
-									  animated:animated
-								scrollPosition:UICollectionViewScrollPositionNone];
-	[self scrollToItem:item animated:animated];
-
-	self.selectedItem = item;
-
-	if ([self.delegate respondsToSelector:@selector(pickerView:didSelectItem:)])
-		[self.delegate pickerView:self didSelectItem:item];
+    @synchronized(lock)
+    {
+        [self.collectionView selectItemAtIndexPath:[NSIndexPath indexPathForItem:item inSection:0]
+                                          animated:animated
+                                    scrollPosition:UICollectionViewScrollPositionNone];
+        [self scrollToItem:item animated:animated];
+        
+        self.selectedItem = item;
+        
+        if ([self.delegate respondsToSelector:@selector(pickerView:didSelectItem:)])
+            [self.delegate pickerView:self didSelectItem:item];
+    }
 }
 
 - (void)didEndScrolling
@@ -210,30 +254,37 @@
 
 - (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section
 {
-	return [self.delegate numberOfItemsInPickerView:self];
+    @synchronized(lock)
+    {
+        return [self.delegate numberOfItemsInPickerView:self];
+    }
 }
 
 - (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath
 {
-	NSString *title = [self.delegate pickerView:self titleForItem:indexPath.item];
-
-	AKCollectionViewCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:NSStringFromClass([AKCollectionViewCell class])
-																		   forIndexPath:indexPath];
-	cell.label.textColor = self.textColor;
-	cell.label.highlightedTextColor = self.highlightedTextColor;
-	cell.label.font = self.font;
-	cell.font = self.font;
-	cell.highlightedFont = self.highlightedFont;
-	if ([cell.label respondsToSelector:@selector(setAttributedText:)]) {
-		cell.label.attributedText = [[NSAttributedString alloc] initWithString:title
-																	attributes:@{NSFontAttributeName: self.font}];
-	} else {
-		cell.label.text = title;
-	}
-
-	cell.selected = (indexPath.item == self.selectedItem);
-
-	return cell;
+    @synchronized(lock)
+    {
+        
+        NSString *title = [self.delegate pickerView:self titleForItem:indexPath.item];
+        
+        AKCollectionViewCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:NSStringFromClass([AKCollectionViewCell class])
+                                                                               forIndexPath:indexPath];
+        cell.label.textColor = self.textColor;
+        cell.label.highlightedTextColor = self.highlightedTextColor;
+        cell.label.font = self.font;
+        cell.font = self.font;
+        cell.highlightedFont = self.highlightedFont;
+        if ([cell.label respondsToSelector:@selector(setAttributedText:)]) {
+            cell.label.attributedText = [[NSAttributedString alloc] initWithString:title
+                                                                        attributes:@{NSFontAttributeName: self.font}];
+        } else {
+            cell.label.text = title;
+        }
+        
+        cell.selected = (indexPath.item == self.selectedItem);
+        
+        return cell;
+    }
 }
 
 - (CGSize)collectionView:(UICollectionView *)collectionView layout:(UICollectionViewLayout *)collectionViewLayout sizeForItemAtIndexPath:(NSIndexPath *)indexPath
@@ -289,6 +340,18 @@
 
 @end
 
+
+
+
+
+
+
+
+
+
+
+#pragma mark - AKCollectionViewCell Implementation
+
 @implementation AKCollectionViewCell
 
 - (void)initialize
@@ -333,16 +396,29 @@
 	[transition setDuration:0.15];
 	[self.label.layer addAnimation:transition forKey:nil];
 
-	UIFont *font = self.selected ? self.highlightedFont : self.font;
-	if ([self.label respondsToSelector:@selector(setAttributedText:)]) {
-		self.label.attributedText = [[NSAttributedString alloc] initWithString:self.label.attributedText.string
-																	attributes:@{NSFontAttributeName: font}];
-	} else {
-		self.label.font = font;
-	}
+    UIFont *font = self.selected ? self.highlightedFont : self.font;
+    if (font != nil) {
+        if ([self.label respondsToSelector:@selector(setAttributedText:)]) {
+            self.label.attributedText = [[NSAttributedString alloc] initWithString:self.label.attributedText.string
+                                                                        attributes:@{NSFontAttributeName: font}];
+        } else {
+            self.label.font = font;
+        }
+    }
 }
 
 @end
+
+
+
+
+
+
+
+
+
+
+#pragma mark - AKCollectionViewLayout Implementation
 
 @interface AKCollectionViewLayout ()
 @property (nonatomic, assign) CGFloat width;
@@ -389,7 +465,8 @@
 	transform = CATransform3DTranslate(transform, 0, 0, self.width);
 	attributes.transform3D = transform;
 
-	attributes.alpha = (ABS(currentAngle) < self.maxAngle);
+//	attributes.alpha = (ABS(currentAngle) < self.maxAngle);
+    attributes.alpha = (ABS(currentAngle) < self.maxAngle);
 
 	return attributes;
 }
@@ -398,7 +475,9 @@
 {
 	NSMutableArray *attributes = [NSMutableArray array];
 	if ([self.collectionView numberOfSections]) {
-		for (NSInteger i = 0; i < [self.collectionView numberOfItemsInSection:0]; i++) {
+//        NSLog(@"El numero de elemntos es: %ld", (long)[self.collectionView numberOfItemsInSection:0]);
+        for (NSInteger i = 0; i < [self.collectionView numberOfItemsInSection:0]; i++) {
+            
 			NSIndexPath *indexPath = [NSIndexPath indexPathForItem:i inSection:0];
 			[attributes addObject:[self layoutAttributesForItemAtIndexPath:indexPath]];
 		}
